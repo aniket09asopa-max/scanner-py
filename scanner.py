@@ -4,9 +4,6 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 
-# ==========================================
-# CREDENTIALS VIA GITHUB SECRETS
-# ==========================================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
@@ -18,9 +15,9 @@ HEADERS = {
 }
 
 def send_alert(message: str):
-    """Dispatches instant formatted alert to Telegram."""
+    """Dispatches formatted message directly to Telegram."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print(f"[!] Alert Preview (Secrets missing):\n{message}\n")
+        print(f"[!] Preview:\n{message}\n")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -32,203 +29,120 @@ def send_alert(message: str):
     try:
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
-            print("[+] Alert sent to Telegram!")
-        else:
-            print(f"[!] Telegram API error: {r.text}")
+            print("[+] Alert successfully sent to Telegram!")
     except Exception as e:
-        print(f"[!] Failed to send Telegram alert: {e}")
+        print(f"[!] Error: {e}")
 
-class NSEOfficialSurveillanceEngine:
+class FridayTradesViewer:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
         self._init_session()
 
     def _init_session(self):
-        """Pre-fetch cookies from the NSE homepage."""
         try:
             self.session.get("https://www.nseindia.com", timeout=12)
             self.session.get("https://www.nseindia.com/companies-listing/corporate-filings-insider-trading", timeout=12)
         except Exception as e:
-            print(f"[!] Session warmup note: {e}")
+            print(f"[!] Session setup note: {e}")
 
-    # -------------------------------------------------------------
-    # 1. 👑 PROMOTER & INSIDER BUYING (SEBI PIT REG 7 DISCLOSURES)
-    # -------------------------------------------------------------
-    def check_promoter_insider_filings(self):
-        print("\n[*] 1. Scanning SEBI PIT Insider Filings (Official NSE Feed)...")
-        from_dt = (datetime.now() - timedelta(days=7)).strftime("%d-%m-%Y")
+    # 1. SEND LATEST PROMOTER / INSIDER DISCLOSURES FROM LAST SESSION
+    def send_recent_pit_filings(self):
+        print("\n[*] Fetching Recent Insider & Promoter Trades...")
+        from_dt = (datetime.now() - timedelta(days=5)).strftime("%d-%m-%Y")
         to_dt = datetime.now().strftime("%d-%m-%Y")
         url = f"https://www.nseindia.com/api/corporates-pit?from_date={from_dt}&to_date={to_dt}"
 
         try:
             resp = self.session.get(url, timeout=12)
             if resp.status_code != 200:
-                print(f"[!] PIT endpoint returned status: {resp.status_code}")
-                return []
+                return
 
-            data = resp.json().get("data", [])
-            print(f"[✓] Retrieved {len(data)} statutory insider filings from NSE.")
-            active_symbols = []
+            records = resp.json().get("data", [])
+            print(f"[✓] Found {len(records)} recent insider filings.")
 
-            for row in data:
-                category = str(row.get("personCategory", "")).strip()
-                action = str(row.get("acqMode", "")).upper()
+            # Send the top 5 most recent trades to Telegram
+            count = 0
+            for row in records:
+                if count >= 5:
+                    break
+
                 symbol = row.get("symbol", "")
                 acq_name = row.get("acqName", "Undisclosed")
+                category = row.get("personCategory", "Insider")
+                action = row.get("acqMode", "Purchase")
                 sec_val = row.get("secVal", "0")
                 sec_acq = row.get("secAcq", "0")
+                sec_type = row.get("secType", "Equity")
 
-                # Filter for Promoter / Director / KMP buying
-                is_promoter_group = any(p in category.upper() for p in ["PROMOTER", "DIRECTOR", "KMP", "PROMOTER GROUP"])
-                is_buy = any(b in action for b in ["MARKET PURCHASE", "ACQUISITION", "BUY", "PREFERENTIAL", "SUBSCRIPTION"])
-
-                if is_promoter_group and is_buy and symbol:
-                    active_symbols.append(symbol)
+                if symbol:
                     msg = (
-                        f"👑 <b>PROMOTER / INSIDER BUYING DETECTED</b> 👑\n\n"
+                        f"👑 <b>RECENT PROMOTER / INSIDER TRADE</b>\n\n"
                         f"• <b>Stock:</b> <code>#{symbol}</code>\n"
                         f"• <b>Entity:</b> {acq_name}\n"
-                        f"• <b>Designation:</b> {category}\n"
-                        f"• <b>Mode:</b> {action}\n"
-                        f"• <b>Quantity Bought:</b> {sec_acq}\n"
-                        f"• <b>Total Value:</b> ₹{sec_val}\n"
-                        f"• <b>Official Filing:</b> SEBI PIT Reg 7(2)\n"
-                        f"<i>Verified via NSE Corporate Disclosures</i>"
+                        f"• <b>Category:</b> {category}\n"
+                        f"• <b>Action:</b> {action}\n"
+                        f"• <b>Shares:</b> {sec_acq}\n"
+                        f"• <b>Value:</b> ₹{sec_val}\n"
+                        f"• <b>Type:</b> {sec_type}\n"
+                        f"<i>Verified Official SEBI PIT Filing</i>"
                     )
                     send_alert(msg)
-                    time.sleep(0.3)
+                    count += 1
+                    time.sleep(0.5)
 
-            return list(set(active_symbols))
         except Exception as e:
-            print(f"[!] PIT Scanner error: {e}")
-            return []
+            print(f"[!] PIT scan error: {e}")
 
-    # -------------------------------------------------------------
-    # 2. 🐋 LARGE BULK & BLOCK DEAL BUYING (HNI / Non-DII Whales)
-    # -------------------------------------------------------------
-    def check_bulk_block_deals(self):
-        print("\n[*] 2. Scanning Daily Bulk & Block Deals (Official NSE Ledger)...")
+    # 2. SEND LATEST BULK / BLOCK DEALS FROM FRIDAY
+    def send_recent_bulk_deals(self):
+        print("\n[*] Fetching Latest Bulk & Block Deals...")
         url = "https://www.nseindia.com/api/snapshot-capital-market-largedeal"
 
         try:
             resp = self.session.get(url, timeout=12)
             if resp.status_code != 200:
-                print(f"[!] Large deal endpoint returned status: {resp.status_code}")
-                return []
+                return
 
             json_data = resp.json()
             deals = json_data.get("BULK_DEALS_DATA", []) + json_data.get("BLOCK_DEALS_DATA", [])
-            print(f"[✓] Retrieved {len(deals)} large exchange transactions.")
-            active_symbols = []
+            print(f"[✓] Found {len(deals)} recent large deals.")
 
+            # Send top 5 most recent bulk/block trades to Telegram
+            count = 0
             for deal in deals:
-                action = str(deal.get("buySell", "")).upper()
-                client = str(deal.get("clientName", "")).strip()
+                if count >= 5:
+                    break
+
                 symbol = deal.get("symbol", "")
+                client = deal.get("clientName", "HNI / Institution")
+                action = deal.get("buySell", "Trade")
                 qty = deal.get("quantityTraded", "0")
                 price = deal.get("tradePrice", "0")
-                deal_type = deal.get("dealType", "Bulk/Block")
+                deal_type = deal.get("dealType", "Bulk/Block Deal")
 
-                if "BUY" in action and symbol:
-                    active_symbols.append(symbol)
+                if symbol:
                     msg = (
-                        f"🐋 <b>WHALE BULK / BLOCK DEAL BUY</b> 🐋\n\n"
+                        f"🐋 <b>LATEST LARGE DEAL ({deal_type})</b>\n\n"
                         f"• <b>Stock:</b> <code>#{symbol}</code>\n"
-                        f"• <b>Buyer:</b> {client}\n"
-                        f"• <b>Price:</b> ₹{price}\n"
+                        f"• <b>Client:</b> {client}\n"
+                        f"• <b>Action:</b> {action.upper()}\n"
+                        f"• <b>Trade Price:</b> ₹{price}\n"
                         f"• <b>Quantity:</b> {qty}\n"
-                        f"• <b>Segment:</b> {deal_type}\n"
-                        f"<i>Verified via NSE Daily Large Deal Ledger</i>"
+                        f"<i>Verified Official NSE Large Deal Ledger</i>"
                     )
                     send_alert(msg)
-                    time.sleep(0.3)
+                    count += 1
+                    time.sleep(0.5)
 
-            return list(set(active_symbols))
         except Exception as e:
-            print(f"[!] Large Deal Scanner error: {e}")
-            return []
+            print(f"[!] Bulk deal scan error: {e}")
 
-    # -------------------------------------------------------------
-    # 3. ⚡ DERIVATIVES OTM OI ANOMALIES (The "IEX" Pattern)
-    # -------------------------------------------------------------
-    def check_derivatives_anomalies(self, target_watchlist: list):
-        print(f"\n[*] 3. Scanning Option Chains for OTM OI Spikes ({len(target_watchlist)} stocks)...")
-
-        for symbol in target_watchlist:
-            url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
-            try:
-                resp = self.session.get(url, timeout=10)
-                if resp.status_code != 200:
-                    continue
-
-                records = resp.json().get("records", {})
-                spot = records.get("underlyingValue", 0)
-                chain = records.get("data", [])
-
-                for row in chain:
-                    strike = row.get("strikePrice", 0)
-
-                    # Deep OTM Call Spike (>4% above spot)
-                    if "CE" in row and strike > spot * 1.04:
-                        ce_oi_change = row["CE"].get("changeinOpenInterest", 0)
-                        if ce_oi_change >= 250_000:
-                            msg = (
-                                f"⚡ <b>DERIVATIVES SURGE: CALL BUYING</b> ⚡\n\n"
-                                f"• <b>Stock:</b> <code>#{symbol}</code>\n"
-                                f"• <b>Spot:</b> ₹{spot}\n"
-                                f"• <b>OTM Strike:</b> ₹{strike}\n"
-                                f"• <b>OI Addition:</b> +{ce_oi_change:,} shares\n"
-                                f"• <b>Signal:</b> Aggressive Bullish Positioning\n"
-                                f"<i>Verified via NSE Derivatives Chain</i>"
-                            )
-                            send_alert(msg)
-
-                    # Deep OTM Put Spike (>4% below spot)
-                    if "PE" in row and strike < spot * 0.96:
-                        pe_oi_change = row["PE"].get("changeinOpenInterest", 0)
-                        if pe_oi_change >= 250_000:
-                            msg = (
-                                f"⚡ <b>DERIVATIVES SURGE: PUT BUYING</b> ⚡\n\n"
-                                f"• <b>Stock:</b> <code>#{symbol}</code>\n"
-                                f"• <b>Spot:</b> ₹{spot}\n"
-                                f"• <b>OTM Strike:</b> ₹{strike}\n"
-                                f"• <b>OI Addition:</b> +{pe_oi_change:,} shares\n"
-                                f"• <b>Signal:</b> Aggressive Bearish/Hedging Buildup\n"
-                                f"<i>Verified via NSE Derivatives Chain</i>"
-                            )
-                            send_alert(msg)
-
-                time.sleep(0.4)
-            except Exception:
-                continue
-
-    # -------------------------------------------------------------
-    # 4. MASTER RUNNER (RUNS ALL INDEPENDENTLY & PINGS TELEGRAM)
-    # -------------------------------------------------------------
-    def run_full_market_surveillance(self):
-        # Startup ping
-        test_ping = (
-            f"🚀 <b>NSE MARKET SURVEILLANCE RUNNING</b>\n\n"
-            f"• <b>Status:</b> Scanning Official Exchange Disclosures\n"
-            f"• <b>Execution Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}"
-        )
-        send_alert(test_ping)
-
-        # 1. Promoter buys
-        pit_symbols = self.check_promoter_insider_filings()
-
-        # 2. Bulk/Block deals
-        bulk_symbols = self.check_bulk_block_deals()
-
-        # 3. Derivatives on active candidates + core high-beta F&O names
-        core_fno = ["IEX", "TATAPOWER", "RELIANCE", "HDFCBANK", "INFY", "TCS", "SBIN", "ADANIENT", "ADANIPORTS", "VEDL", "ITC"]
-        combined_watchlist = list(set(pit_symbols + bulk_symbols + core_fno))
-        self.check_derivatives_anomalies(combined_watchlist)
-
-        print("\n[✓] Surveillance Run Complete.")
-
+    def run(self):
+        send_alert("📊 <b>PULLING LATEST FRIDAY DISCLOSURES & TRADES...</b>")
+        self.send_recent_pit_filings()
+        self.send_recent_bulk_deals()
 
 if __name__ == "__main__":
-    engine = NSEOfficialSurveillanceEngine()
-    engine.run_full_market_surveillance()
+    viewer = FridayTradesViewer()
+    viewer.run()
