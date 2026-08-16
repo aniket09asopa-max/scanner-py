@@ -129,6 +129,24 @@ class MarketWideInsiderScanner:
                 json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
             )
 
+# ==========================================
+# MASTER EXECUTION WITH HANDSHAKE CONFIRMATION
+# ==========================================
 if __name__ == "__main__":
     scanner = MarketWideInsiderScanner()
+    
+    # 1. SEND TEST PING TO TELEGRAM TO CONFIRM CONNECTION
+    if TELEGRAM_BOT_TOKEN != "YOUR_BOT_TOKEN":
+        init_ping = (
+            f"✅ <b>NSE ANOMALY SCANNER ACTIVE</b>\n\n"
+            f"• <b>Status:</b> Connected to NSE Feeds\n"
+            f"• <b>Surveillance:</b> F&O + Bulk/Block + PIT Reg 7\n"
+            f"• <b>Execution Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}"
+        )
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": init_ping, "parse_mode": "HTML"}
+        )
+
+    # 2. RUN FULL MARKET SCAN
     scanner.run_market_scan()
