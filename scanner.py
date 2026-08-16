@@ -1,21 +1,13 @@
 import os
 import time
 import requests
-import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 
+# Credentials
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://www.nseindia.com/"
-}
-
 def send_alert(message: str):
-    """Dispatches formatted message directly to Telegram."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print(f"[!] Preview:\n{message}\n")
         return
@@ -29,120 +21,109 @@ def send_alert(message: str):
     try:
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
-            print("[+] Alert successfully sent to Telegram!")
+            print("[+] Sent to Telegram!")
+        else:
+            print(f"[!] Telegram error: {r.text}")
     except Exception as e:
-        print(f"[!] Error: {e}")
+        print(f"[!] Alert error: {e}")
 
-class FridayTradesViewer:
+class IndianMarketDisclosures:
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update(HEADERS)
-        self._init_session()
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://www.bseindia.com/",
+            "Accept": "application/json, text/plain, */*"
+        }
 
-    def _init_session(self):
+    # 1. PULL RECENT SEBI PIT INSIDER / PROMOTER FILINGS VIA BSE
+    def get_pit_insider_trades(self):
+        print("[*] Fetching Official Insider / Promoter Filings...")
+        url = "https://api.bseindia.com/BseIndiaAPI/api/InsiderTrading/w?page_no=1"
         try:
-            self.session.get("https://www.nseindia.com", timeout=12)
-            self.session.get("https://www.nseindia.com/companies-listing/corporate-filings-insider-trading", timeout=12)
-        except Exception as e:
-            print(f"[!] Session setup note: {e}")
-
-    # 1. SEND LATEST PROMOTER / INSIDER DISCLOSURES FROM LAST SESSION
-    def send_recent_pit_filings(self):
-        print("\n[*] Fetching Recent Insider & Promoter Trades...")
-        from_dt = (datetime.now() - timedelta(days=5)).strftime("%d-%m-%Y")
-        to_dt = datetime.now().strftime("%d-%m-%Y")
-        url = f"https://www.nseindia.com/api/corporates-pit?from_date={from_dt}&to_date={to_dt}"
-
-        try:
-            resp = self.session.get(url, timeout=12)
+            resp = requests.get(url, headers=self.headers, timeout=12)
             if resp.status_code != 200:
+                print(f"[!] BSE PIT API returned status: {resp.status_code}")
                 return
 
-            records = resp.json().get("data", [])
-            print(f"[✓] Found {len(records)} recent insider filings.")
+            data = resp.json().get("Table", [])
+            print(f"[✓] Retrieved {len(data)} statutory insider filings.")
 
-            # Send the top 5 most recent trades to Telegram
             count = 0
-            for row in records:
-                if count >= 5:
+            for item in data:
+                if count >= 6:
                     break
 
-                symbol = row.get("symbol", "")
-                acq_name = row.get("acqName", "Undisclosed")
-                category = row.get("personCategory", "Insider")
-                action = row.get("acqMode", "Purchase")
-                sec_val = row.get("secVal", "0")
-                sec_acq = row.get("secAcq", "0")
-                sec_type = row.get("secType", "Equity")
+                symbol = item.get("scrip_code", item.get("SYMBOL", ""))
+                company = item.get("scrip_name", item.get("COMPANY_NAME", "Indian Co"))
+                acq_name = item.get("person_name", item.get("ACQ_NAME", "Promoter/Director"))
+                person_cat = item.get("person_category", item.get("CATEGORY", "Insider"))
+                action = item.get("mode_of_acq", item.get("ACQ_MODE", "Market Purchase"))
+                qty = item.get("no_of_sec_acq", item.get("QUANTITY", "0"))
+                val = item.get("val_of_sec_acq", item.get("VALUE", "0"))
 
-                if symbol:
-                    msg = (
-                        f"👑 <b>RECENT PROMOTER / INSIDER TRADE</b>\n\n"
-                        f"• <b>Stock:</b> <code>#{symbol}</code>\n"
-                        f"• <b>Entity:</b> {acq_name}\n"
-                        f"• <b>Category:</b> {category}\n"
-                        f"• <b>Action:</b> {action}\n"
-                        f"• <b>Shares:</b> {sec_acq}\n"
-                        f"• <b>Value:</b> ₹{sec_val}\n"
-                        f"• <b>Type:</b> {sec_type}\n"
-                        f"<i>Verified Official SEBI PIT Filing</i>"
-                    )
-                    send_alert(msg)
-                    count += 1
-                    time.sleep(0.5)
+                msg = (
+                    f"👑 <b>PROMOTER / INSIDER TRADE FILING</b> 👑\n\n"
+                    f"• <b>Company:</b> {company} (<code>#{symbol}</code>)\n"
+                    f"• <b>Entity:</b> {acq_name}\n"
+                    f"• <b>Category:</b> {person_cat}\n"
+                    f"• <b>Action:</b> {action}\n"
+                    f"• <b>Shares:</b> {qty}\n"
+                    f"• <b>Value:</b> ₹{val}\n"
+                    f"<i>Official Statutory SEBI PIT Disclosure</i>"
+                )
+                send_alert(msg)
+                count += 1
+                time.sleep(0.5)
 
         except Exception as e:
-            print(f"[!] PIT scan error: {e}")
+            print(f"[!] Error reading PIT filings: {e}")
 
-    # 2. SEND LATEST BULK / BLOCK DEALS FROM FRIDAY
-    def send_recent_bulk_deals(self):
-        print("\n[*] Fetching Latest Bulk & Block Deals...")
-        url = "https://www.nseindia.com/api/snapshot-capital-market-largedeal"
-
+    # 2. PULL RECENT BULK & BLOCK DEALS VIA BSE
+    def get_bulk_block_deals(self):
+        print("[*] Fetching Official Bulk & Block Deals...")
+        url = "https://api.bseindia.com/BseIndiaAPI/api/BulkDeals/w"
         try:
-            resp = self.session.get(url, timeout=12)
+            resp = requests.get(url, headers=self.headers, timeout=12)
             if resp.status_code != 200:
+                print(f"[!] BSE Bulk Deals API returned status: {resp.status_code}")
                 return
 
-            json_data = resp.json()
-            deals = json_data.get("BULK_DEALS_DATA", []) + json_data.get("BLOCK_DEALS_DATA", [])
-            print(f"[✓] Found {len(deals)} recent large deals.")
+            data = resp.json().get("Table", [])
+            print(f"[✓] Retrieved {len(data)} large deal transactions.")
 
-            # Send top 5 most recent bulk/block trades to Telegram
             count = 0
-            for deal in deals:
-                if count >= 5:
+            for item in data:
+                if count >= 6:
                     break
 
-                symbol = deal.get("symbol", "")
-                client = deal.get("clientName", "HNI / Institution")
-                action = deal.get("buySell", "Trade")
-                qty = deal.get("quantityTraded", "0")
-                price = deal.get("tradePrice", "0")
-                deal_type = deal.get("dealType", "Bulk/Block Deal")
+                company = item.get("scrip_name", "Indian Equity")
+                client = item.get("client_name", "HNI / Fund")
+                deal_type = item.get("deal_type", "Bulk Deal")
+                qty = item.get("quantity", "0")
+                price = item.get("price", "0")
+                action = item.get("buy_sell", "BUY")
 
-                if symbol:
-                    msg = (
-                        f"🐋 <b>LATEST LARGE DEAL ({deal_type})</b>\n\n"
-                        f"• <b>Stock:</b> <code>#{symbol}</code>\n"
-                        f"• <b>Client:</b> {client}\n"
-                        f"• <b>Action:</b> {action.upper()}\n"
-                        f"• <b>Trade Price:</b> ₹{price}\n"
-                        f"• <b>Quantity:</b> {qty}\n"
-                        f"<i>Verified Official NSE Large Deal Ledger</i>"
-                    )
-                    send_alert(msg)
-                    count += 1
-                    time.sleep(0.5)
+                msg = (
+                    f"🐋 <b>LARGE BULK / BLOCK DEAL</b> 🐋\n\n"
+                    f"• <b>Company:</b> {company}\n"
+                    f"• <b>Client:</b> {client}\n"
+                    f"• <b>Action:</b> {action.upper()}\n"
+                    f"• <b>Trade Price:</b> ₹{price}\n"
+                    f"• <b>Quantity:</b> {qty}\n"
+                    f"• <b>Type:</b> {deal_type}\n"
+                    f"<i>Official Exchange Bulk Deal Ledger</i>"
+                )
+                send_alert(msg)
+                count += 1
+                time.sleep(0.5)
 
         except Exception as e:
-            print(f"[!] Bulk deal scan error: {e}")
+            print(f"[!] Error reading Bulk Deals: {e}")
 
     def run(self):
-        send_alert("📊 <b>PULLING LATEST FRIDAY DISCLOSURES & TRADES...</b>")
-        self.send_recent_pit_filings()
-        self.send_recent_bulk_deals()
+        self.get_pit_insider_trades()
+        self.get_bulk_block_deals()
 
 if __name__ == "__main__":
-    viewer = FridayTradesViewer()
-    viewer.run()
+    scanner = IndianMarketDisclosures()
+    scanner.run()
